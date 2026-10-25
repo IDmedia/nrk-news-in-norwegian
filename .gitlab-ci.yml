@@ -1,0 +1,22 @@
+# Builds the Flash Briefing feeds every 15 minutes and publishes them to the
+# "feeds" branch. The push mirror copies that branch to GitHub, and GitHub Pages
+# serves it at BASE_URL for Alexa.
+#
+# Setup (see README): CI/CD variable PUSH_TOKEN, and a schedule "*/15 * * * *".
+
+update-feeds:
+  image: python:3.12-slim
+  tags:
+    - linux
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  variables:
+    BASE_URL: https://idmedia.github.io/nrk-news-in-norwegian
+    GIT_DEPTH: 1
+  # Never run two at once; they would race on the feeds branch.
+  resource_group: feeds
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg git ca-certificates > /dev/null
+  script:
+    - sh deploy/publish-feeds.sh
