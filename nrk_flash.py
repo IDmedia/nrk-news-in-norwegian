@@ -12,11 +12,16 @@ feed per region:
     <out>/<region>/feed.json
     <out>/<region>/<program>-<start>.mp3
 
+Each MP3 starts with a short spoken intro saying when the bulletin aired
+("NRK Sørlandet, mandag klokka sju førtifire."), made with edge-tts.
+
 Serve <out> over HTTPS at --base-url and run this every 15 minutes.
-Needs Python 3.9+ and ffmpeg. No third-party packages.
+Needs Python 3.9+, ffmpeg and, for the intro, edge-tts (pip install edge-tts).
+Without edge-tts the bulletins are published without the intro.
 """
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -62,6 +67,13 @@ NOT_NEWS_TITLE = re.compile(r"quiz", re.I)
 EPISODES_TO_CHECK = 6
 MIN_LENGTH_SEC = 60
 DEFAULT_LENGTH_SEC = 300
+
+DEFAULT_VOICE = "nb-NO-FinnNeural"
+INTRO_PAUSE_SEC = 0.3  # Extra silence between the intro and the bulletin.
+WEEKDAYS = ["mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag", "søndag"]
+NUMBERS = ["null", "en", "to", "tre", "fire", "fem", "seks", "sju", "åtte", "ni", "ti",
+           "elleve", "tolv", "tretten", "fjorten", "femten", "seksten", "sytten", "atten", "nitten"]
+TENS = ["", "", "tjue", "tretti", "førti", "femti"]
 
 log = logging.getLogger("nrk_flash")
 
@@ -162,6 +174,37 @@ def find_national_news(now):
     return None
 
 
+# ---------- intro ----------
+
+def number_words(n):
+    if n < 20:
+        return NUMBERS[n]
+    return TENS[n // 10] + (NUMBERS[n % 10] if n % 10 else "")
+
+
+def intro_text(name, aired):
+    """For example "NRK Sørlandet, mandag klokka sju førtifire."
+
+    The time is written out in words so the voice can't read 07.44 as a date or a decimal.
+    """
+    t = aired.astimezone(OSLO)
+    hour = "ett" if t.hour == 1 else number_words(t.hour)
+    if t.minute == 0:
+        clock = hour
+    elif t.minute < 10:
+        clock = f"{hour} null {number_words(t.minute)}"
+    else:
+        clock = f"{hour} {number_words(t.minute)}"
+    return f"{name}, {WEEKDAYS[t.weekday()]} klokka {clock}."
+
+
+def make_intro(text, voice, dest):
+    """Speaks the text with edge-tts (Microsoft's online voices) into an MP3."""
+    import edge_tts  # Optional; only needed for the intro.
+
+    asyncio.run(edge_tts.Communicate(text, voice).save(dest))
+
+
 # ---------- audio ----------
 
 def media_playlist(master_url):
@@ -185,8 +228,9 @@ def media_playlist(master_url):
     return media_url, segments
 
 
-def make_mp3(clip, dest):
-    """Downloads the HLS segments covering the clip and encodes an Alexa-ready MP3."""
+def make_mp3(clip, dest, intro=None, voice=DEFAULT_VOICE):
+    """Downloads the HLS segments covering the clip and encodes an Alexa-ready MP3,
+    starting with the spoken intro text if one is given."""
     _, segments = media_playlist(clip["master"])
     t = 0.0
     first_start = None
@@ -205,20 +249,39 @@ def make_mp3(clip, dest):
         if first_start is None:
             raise RuntimeError("No audio segments in range")
 
+        intro_path = None
+        if intro:
+            intro_path = os.path.join(tmp, "intro.mp3")
+            try:
+                make_intro(intro, voice, intro_path)
+            except Exception as e:  # Better a bulletin without the intro than none.
+                log.warning("intro failed, encoding without it: %s", e)
+                intro_path = None
+
         offset = clip["start"] - first_start
         length = (clip["end"] - clip["start"]) if clip["end"] is not None else None
         # Amazon: 256 kbps MP3, about -14 LUFS, true peak at most -2 dBFS. Short fades
-        # so the cut doesn't click.
-        filters = ["afade=t=in:d=0.5"]
+        # so the cut doesn't click. The intro is normalized on its own so the voice
+        # comes out as loud as the bulletin.
+        norm = "loudnorm=I=-14:TP=-2:LRA=11,aresample=44100,aformat=channel_layouts=stereo"
+        news = ["afade=t=in:d=0.5"]
         if length:
-            filters.append(f"afade=t=out:st={max(0, length - 1.5):.2f}:d=1.5")
-        filters.append("loudnorm=I=-14:TP=-2:LRA=11")
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-               "-ss", f"{offset:.3f}", "-i", ts_path]
+            news.append(f"afade=t=out:st={max(0, length - 1.5):.2f}:d=1.5")
+        news.append(norm)
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{offset:.3f}"]
         if length:
             cmd += ["-t", f"{length:.3f}"]
+        cmd += ["-i", ts_path]
+        if intro_path:
+            cmd += ["-i", intro_path, "-filter_complex",
+                    f"[1:a]{norm},apad=pad_dur={INTRO_PAUSE_SEC}[intro];"
+                    f"[0:a]{','.join(news)}[news];"
+                    "[intro][news]concat=n=2:v=0:a=1[out]",
+                    "-map", "[out]"]
+        else:
+            cmd += ["-af", ",".join(news)]
         tmp_mp3 = dest + ".part"
-        cmd += ["-af", ",".join(filters), "-ar", "44100", "-ac", "2",
+        cmd += ["-ar", "44100", "-ac", "2",
                 "-c:a", "libmp3lame", "-b:a", "256k", "-f", "mp3", tmp_mp3]
         subprocess.run(cmd, check=True)
         os.replace(tmp_mp3, dest)
@@ -233,7 +296,7 @@ def write_json(path, data):
     os.replace(tmp, path)
 
 
-def build_region(key, name, clip, out_dir, base_url):
+def build_region(key, name, clip, out_dir, base_url, voice=DEFAULT_VOICE):
     region_dir = os.path.join(out_dir, key)
     os.makedirs(region_dir, exist_ok=True)
     filename = f"{clip['program_id']}-{int(clip['start'])}.mp3"
@@ -243,7 +306,8 @@ def build_region(key, name, clip, out_dir, base_url):
         log.info("%s: %s already done", key, filename)
     else:
         log.info("%s: encoding %s (%s, %s)", key, filename, clip["chapter"], clip["aired"].astimezone(OSLO))
-        make_mp3(clip, mp3_path)
+        intro = intro_text(name, clip["aired"]) if voice else None
+        make_mp3(clip, mp3_path, intro, voice)
 
     feed_path = os.path.join(region_dir, "feed.json")
     previous = None
@@ -279,6 +343,9 @@ def main():
                     help=f"comma-separated: {','.join(REGIONS)},national or 'all' (default)")
     ap.add_argument("--max-length", type=int, default=480,
                     help="longest clip in seconds; a chapter runs to the next marker (default 480)")
+    ap.add_argument("--voice", default=DEFAULT_VOICE,
+                    help=f"edge-tts voice for the intro (default {DEFAULT_VOICE}, or nb-NO-PernilleNeural)")
+    ap.add_argument("--no-intro", action="store_true", help="don't add the spoken date/time intro")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
@@ -299,7 +366,7 @@ def main():
                 name, series = REGIONS[key]
                 clip = find_local_news(series, args.max_length, now)
             if clip:
-                build_region(key, name, clip, args.out, base_url)
+                build_region(key, name, clip, args.out, base_url, None if args.no_intro else args.voice)
             else:
                 # Keep the previous feed; Alexa ignores items older than 7 days.
                 log.warning("%s: no local news chapter found, feed unchanged", key)

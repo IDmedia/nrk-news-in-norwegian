@@ -18,5 +18,6 @@ update-feeds:
   resource_group: feeds
   before_script:
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg git ca-certificates > /dev/null
+    - pip install --quiet --root-user-action=ignore edge-tts
   script:
     - sh deploy/publish-feeds.sh

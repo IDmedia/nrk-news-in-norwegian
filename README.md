@@ -23,6 +23,9 @@ chapter markers such as *"Lokale nyheter"*, *"Nyheter fra Buskerud"*, *"Finnmark
    newest news chapter that has finished airing.
 2. Downloads just that part of NRK's stream and uses ffmpeg to make an MP3 that meets Amazon's requirements:
    256 kbps, about −14 LUFS, true peak at most −2 dBFS, with short fades in and out.
+   The MP3 starts with a short spoken intro saying when the bulletin aired, for example
+   *"NRK Sørlandet, fredag klokka sju førtifire"*, so you can tell whether it's current.
+   The intro is read by Microsoft's `nb-NO-FinnNeural` voice through [edge-tts](https://github.com/rany2/edge-tts).
 3. Writes a Flash Briefing feed to `<region>/feed.json` that points to the MP3.
 
 A bulletin that is already encoded isn't processed again, so a run with nothing new takes under a second.
@@ -49,7 +52,13 @@ Leave out regions without markers when you set up the skill.
 
 ## 1. Run the feed generator
 
-You need Python 3.9 or newer and ffmpeg. There are no Python packages to install.
+You need Python 3.9 or newer and ffmpeg. For the spoken intro you also need edge-tts:
+
+```bash
+pip install edge-tts
+```
+
+Without it, or if Microsoft's voice service can't be reached, the bulletin is published without the intro.
 
 ```bash
 python3 nrk_flash.py --out public --base-url https://nrk-flash.example.no -v
@@ -61,6 +70,8 @@ python3 nrk_flash.py --out public --base-url https://nrk-flash.example.no -v
 | `--base-url` | Public HTTPS address where that folder is served. Amazon must be able to reach it. |
 | `--regions` | For example `sorlandet,national`. Default: all regions. |
 | `--max-length` | Longest clip in seconds (default 480). A chapter runs until the next marker, which can include a jingle or the start of a song. |
+| `--voice` | edge-tts voice for the intro (default `nb-NO-FinnNeural`; `nb-NO-PernilleNeural` is the female voice) |
+| `--no-intro` | Leave out the spoken intro |
 | `-v` | Show what it does |
 
 The script exits with code 1 if any region failed, but it still updates the others.
