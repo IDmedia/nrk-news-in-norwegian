@@ -64,6 +64,14 @@ NATIONAL = ("NRK Nyheter", "nrk-nyheter-radio")
 NEWS_TITLE = re.compile(r"nyhe(i)?t|^nytt fra|(lokal|finnmarks)nytt", re.I)
 NOT_NEWS_TITLE = re.compile(r"quiz", re.I)
 
+# Fallback for regions whose editors only sometimes add news chapter markers: the times
+# (Oslo time) the bulletins air at. They are used for an episode that has no news markers
+# at all. Sørlandet's markers, when present, start within 10 seconds of these times.
+SCHEDULE = {
+    "sorlandet": ["06:57", "07:44"],
+}
+SCHEDULED_LENGTH_SEC = 360
+
 EPISODES_TO_CHECK = 6
 MIN_LENGTH_SEC = 60
 DEFAULT_LENGTH_SEC = 300
@@ -119,8 +127,33 @@ def share_url(ep, series):
     return href or f"https://radio.nrk.no/serie/{series}/{ep['episodeId']}"
 
 
-def find_local_news(series, max_length, now):
-    """Newest finished local news chapter in a region's radio show, or None."""
+def news_chapters(points, program_length, max_length):
+    """(title, start, length) for each chapter marked as news."""
+    chapters = []
+    for i, (title, ch_start) in enumerate(points):
+        if not NEWS_TITLE.search(title) or NOT_NEWS_TITLE.search(title):
+            continue
+        nxt = points[i + 1][1] if i + 1 < len(points) else (program_length or ch_start + DEFAULT_LENGTH_SEC)
+        chapters.append((title, ch_start, min(max_length, max(MIN_LENGTH_SEC, nxt - ch_start))))
+    return chapters
+
+
+def scheduled_chapters(schedule, start, program_length):
+    """(title, start, length) for each scheduled bulletin time within the episode."""
+    chapters = []
+    local = start.astimezone(OSLO)
+    for hhmm in schedule:
+        h, m = map(int, hhmm.split(":"))
+        ch_start = (local.replace(hour=h, minute=m, second=0, microsecond=0) - local).total_seconds()
+        if 0 <= ch_start and ch_start + SCHEDULED_LENGTH_SEC <= (program_length or float("inf")):
+            chapters.append((f"Lokale nyheter {hhmm} (fast tid)", ch_start, SCHEDULED_LENGTH_SEC))
+    return chapters
+
+
+def find_local_news(series, max_length, now, schedule=()):
+    """Newest finished local news chapter in a region's radio show, or None.
+
+    Episodes without any news markers fall back to the region's schedule, if it has one."""
     for ep in latest_episodes(series, EPISODES_TO_CHECK):
         start = datetime.fromisoformat(ep["date"])
         if start > now:
@@ -130,12 +163,10 @@ def find_local_news(series, max_length, now):
         program_length = (program.get("duration") or {}).get("seconds") or ep.get("durationInSeconds") or 0
         elapsed = (now - start).total_seconds()
 
-        for i in range(len(points) - 1, -1, -1):
-            title, ch_start = points[i]
-            if not NEWS_TITLE.search(title) or NOT_NEWS_TITLE.search(title):
-                continue
-            nxt = points[i + 1][1] if i + 1 < len(points) else (program_length or ch_start + DEFAULT_LENGTH_SEC)
-            length = min(max_length, max(MIN_LENGTH_SEC, nxt - ch_start))
+        chapters = news_chapters(points, program_length, max_length)
+        if not chapters and schedule:
+            chapters = scheduled_chapters(schedule, start, program_length)
+        for title, ch_start, length in reversed(chapters):
             if ch_start + length > elapsed:
                 continue  # Still airing.
             master = playable_url(ep["episodeId"])
@@ -364,7 +395,7 @@ def main():
                 name, clip = NATIONAL[0], find_national_news(now)
             else:
                 name, series = REGIONS[key]
-                clip = find_local_news(series, args.max_length, now)
+                clip = find_local_news(series, args.max_length, now, SCHEDULE.get(key, ()))
             if clip:
                 build_region(key, name, clip, args.out, base_url, None if args.no_intro else args.voice)
             else:

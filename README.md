@@ -166,6 +166,9 @@ Then open the `streamUrl` and check that the clip starts and ends in a sensible 
   about 10 MB at 256 kbps, so that's roughly 10,000 plays a month. If the skill gets more popular than that,
   move the output to object storage or a CDN by changing `BASE_URL` and where the files are copied.
 - **Chapter length is a guess.** The clip runs to the next chapter marker, at most `--max-length` seconds.
+- **Missing markers.** Some editors add news markers only on some days (NRK Sørlandet skips them for weeks).
+  For regions listed in `SCHEDULE` in `nrk_flash.py`, an episode without news markers falls back to the fixed
+  bulletin times (Sørlandet: 06:57 and 07:44, 6 minutes each).
 - **Weekends.** Regional shows run on weekdays, so the feed keeps Friday's last bulletin over the weekend.
   Alexa ignores items older than 7 days.
 - **Delay.** A bulletin is available once its chapter has finished and NRK has published the episode,
