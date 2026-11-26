@@ -17,7 +17,7 @@ chapter markers such as *"Lokale nyheter"*, *"Nyheter fra Buskerud"*, *"Finnmark
 
 ## How it works
 
-[`nrk_flash.py`](nrk_flash.py) runs every 15 minutes. For each region it:
+[`nrk_flash.py`](nrk_flash.py) runs on a schedule (see below). For each region it:
 
 1. Looks through the latest episodes of the region's show in NRK's radio API (`psapi.nrk.no`) and finds the
    newest news chapter that has finished airing.
@@ -80,7 +80,10 @@ The script exits with code 1 if any region failed, but it still updates the othe
 
 The feeds are built on GitLab (`git.int.idmedia.no/idmedia/nrk-news-in-norwegian`) and served from GitHub Pages:
 
-1. A scheduled GitLab pipeline ([`.gitlab-ci.yml`](.gitlab-ci.yml)) runs every 15 minutes.
+1. A scheduled GitLab pipeline ([`.gitlab-ci.yml`](.gitlab-ci.yml)) runs every 15 minutes. On weekdays 06–18
+   (Norwegian time), when the regional bulletins air, every run builds the feeds. Otherwise only one run an
+   hour does, for the national bulletin, and the rest stop after a few seconds
+   ([`deploy/should_run.py`](deploy/should_run.py)).
 2. [`deploy/publish-feeds.sh`](deploy/publish-feeds.sh) builds the feeds and force-pushes them to the `feeds` branch.
    The branch always holds a single commit, so old MP3s don't pile up in the history.
 3. The GitLab push mirror copies `feeds` to [github.com/IDmedia/nrk-news-in-norwegian](https://github.com/IDmedia/nrk-news-in-norwegian).

@@ -78,6 +78,7 @@ DEFAULT_LENGTH_SEC = 300
 
 DEFAULT_VOICE = "nb-NO-FinnNeural"
 INTRO_PAUSE_SEC = 0.3  # Extra silence between the intro and the bulletin.
+INTRO_TIMEOUT_SEC = 30  # edge-tts has no timeout of its own and can hang on a stalled connection.
 WEEKDAYS = ["mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag", "søndag"]
 NUMBERS = ["null", "en", "to", "tre", "fire", "fem", "seks", "sju", "åtte", "ni", "ti",
            "elleve", "tolv", "tretten", "fjorten", "femten", "seksten", "sytten", "atten", "nitten"]
@@ -233,7 +234,7 @@ def make_intro(text, voice, dest):
     """Speaks the text with edge-tts (Microsoft's online voices) into an MP3."""
     import edge_tts  # Optional; only needed for the intro.
 
-    asyncio.run(edge_tts.Communicate(text, voice).save(dest))
+    asyncio.run(asyncio.wait_for(edge_tts.Communicate(text, voice).save(dest), INTRO_TIMEOUT_SEC))
 
 
 # ---------- audio ----------

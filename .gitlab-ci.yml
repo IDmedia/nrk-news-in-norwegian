@@ -1,8 +1,9 @@
-# Builds the Flash Briefing feeds every 15 minutes and publishes them to the
-# "feeds" branch. The push mirror copies that branch to GitHub, and GitHub Pages
-# serves it at BASE_URL for Alexa.
+# Builds the Flash Briefing feeds and publishes them to the "feeds" branch. The push
+# mirror copies that branch to GitHub, and GitHub Pages serves it at BASE_URL for Alexa.
 #
 # Setup (see README): CI/CD variable PUSH_TOKEN, and a schedule "*/15 * * * *".
+# Outside weekday daytime (Oslo time) only one run an hour does any work; the others
+# stop after a few seconds (see deploy/should_run.py).
 
 update-feeds:
   image: python:3.12-slim
@@ -14,9 +15,26 @@ update-feeds:
   variables:
     BASE_URL: https://idmedia.github.io/nrk-news-in-norwegian
     GIT_DEPTH: 1
+    DEBIAN_FRONTEND: noninteractive
+    # Abort a git clone/push that stalls instead of hanging until the job times out.
+    GIT_HTTP_LOW_SPEED_LIMIT: 1000
+    GIT_HTTP_LOW_SPEED_TIME: 60
+  # A normal run takes a minute or two; don't let a hang hold the resource group for an hour.
+  timeout: 15 minutes
+  # Retry failures that aren't the script's fault (runner or network trouble).
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+      - unknown_failure
   # Never run two at once; they would race on the feeds branch.
   resource_group: feeds
   before_script:
+    # before_script and script run in one shell, so this exit ends the job as passed.
+    - python3 deploy/should_run.py || { echo "No bulletins due now, skipping."; exit 0; }
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg git ca-certificates > /dev/null
     - pip install --quiet --root-user-action=ignore edge-tts
   script:
